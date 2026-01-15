@@ -2,7 +2,8 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 
-# Page Config
+from PyPDF2 import PdfReader
+from langchain.text_splitter import RecursiveCharacterTextSplitter# Page Config
 st.set_page_config(page_title="Advanced RAG Assistant 🧠", layout="wide")
 
 # Custom CSS for Source Boxes
@@ -32,3 +33,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+def get_pdf_text_with_metadata(pdf_docs):
+    """
+    Extracts text from PDFs along with page numbers (metadata).
+    """
+    documents = []
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        pdf_name = pdf.name
+        
+        for i, page in enumerate(pdf_reader.pages):
+            text = page.extract_text()
+            if text:
+                # Create document chunks with metadata
+                chunks = text_splitter.create_documents(
+                    texts=[text], 
+                    metadatas=[{"source": pdf_name, "page": i + 1}]
+                )
+                documents.extend(chunks)
+    return documents    
