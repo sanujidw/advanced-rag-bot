@@ -5,6 +5,10 @@ from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 # Page Config
 st.set_page_config(page_title="Advanced RAG Assistant 🧠", layout="wide")
 
@@ -68,4 +72,31 @@ def get_vector_store(documents):
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     
     vectorstore = FAISS.from_documents(documents, embeddings)
-    return vectorstore   
+    return vectorstore  
+def get_rag_chain(vectorstore):
+    """
+    Creates the Retrieval Chain with a custom system prompt.
+    """
+    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
+
+    # System Prompt: Strict instructions to prevent hallucinations
+    prompt = ChatPromptTemplate.from_template("""
+    Answer the following question based only on the provided context.
+    Think step by step before answering.
+    If the answer is not in the context, say "I don't have enough information in the documents to answer that."
+    
+    <context>
+    {context}
+    </context>
+
+    Question: {input}
+    """)
+
+    # Chain 1: Generate Answer
+    document_chain = create_stuff_documents_chain(llm, prompt)
+
+    # Chain 2: Retrieve + Generate
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+    return retrieval_chain 
