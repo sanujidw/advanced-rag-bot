@@ -1,155 +1,169 @@
 import streamlit as st
 import os
-from dotenv import load_dotenv
+import numpy as np
+import faiss
 from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# 1. Setup Environment
+load_dotenv()
+api_key = os.getenv("GOOGLE_API_KEY")
+
+if not api_key:
+    st.error("API Key not found. Please check your .env file.")
+    st.stop()
+
+# Configure Google Gemini
+genai.configure(api_key=api_key)
+
 # Page Config
-st.set_page_config(page_title="Advanced RAG Assistant 🧠", layout="wide")
+st.set_page_config(page_title="Pure RAG Chatbot (No LangChain)", layout="wide")
 
-# Custom CSS for Source Boxes
-st.markdown("""
-<style>
-    .source-box {
-        background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 5px;
-        margin-top: 10px;
-        font-size: 0.9em;
-    }
-</style>
-""", unsafe_allow_html=True)
+# --- Helper Functions (අපිම ලියන Logic එක) ---
 
-
-    
-def get_pdf_text_with_metadata(pdf_docs):
-    """
-    Extracts text from PDFs along with page numbers (metadata).
-    """
-    documents = []
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-
+def get_pdf_text(pdf_docs):
+    """PDF එක කියවලා Text ගන්න Function එක"""
+    text = ""
     for pdf in pdf_docs:
         pdf_reader = PdfReader(pdf)
-        pdf_name = pdf.name
-        
-        for i, page in enumerate(pdf_reader.pages):
-            text = page.extract_text()
-            if text:
-                # Create document chunks with metadata
-                chunks = text_splitter.create_documents(
-                    texts=[text], 
-                    metadatas=[{"source": pdf_name, "page": i + 1}]
-                )
-                documents.extend(chunks)
-    return documents 
-def get_vector_store(documents):
-    """
-    Creates a FAISS vector store using Free HuggingFace embeddings.
-    """
-    # Using a lightweight, free model
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text
+    return text
+
+def get_chunks(text, chunk_size=1000, overlap=200):
+    """LangChain නැතුව Python වලින්ම Text එක කඩන Function එක"""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start += chunk_size - overlap # Overlap logic
+    return chunks
+
+def get_embeddings(text_chunks):
+    """Google Gemini Embedding Model එක කෙලින්ම Call කිරීම"""
+    embeddings = []
+    # Batch processing to handle API limits (optional logic handled simply here)
+    for chunk in text_chunks:
+        # 'models/embedding-001' තමයි Google Free embedding model එක
+        result = genai.embed_content(
+            model="models/embedding-001",
+            content=chunk,
+            task_type="retrieval_document",
+            title="Embedding of PDF chunk"
+        )
+        embeddings.append(result['embedding'])
+    return np.array(embeddings, dtype='float32')
+
+def create_vector_store(text_chunks, embeddings):
+    """FAISS index එක හදන එක (Database Creation)"""
+    dimension = embeddings.shape[1] # 768 dimensions for Gemini
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings)
+    return index
+
+def get_answer(query, index, text_chunks):
+    """ප්‍රශ්නයට අදාල කොටස් හොයලා උත්තරේ දෙන එක"""
     
-    vectorstore = FAISS.from_documents(documents, embeddings)
-    return vectorstore  
-def get_rag_chain(vectorstore):
-    """
-    Creates the Retrieval Chain with a custom system prompt.
-    """
-    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
-
-    # System Prompt: Strict instructions to prevent hallucinations
-    prompt = ChatPromptTemplate.from_template("""
-    Answer the following question based only on the provided context.
-    Think step by step before answering.
-    If the answer is not in the context, say "I don't have enough information in the documents to answer that."
+    # 1. Query එක Embed කරනවා
+    query_embedding = genai.embed_content(
+        model="models/embedding-001",
+        content=query,
+        task_type="retrieval_query"
+    )
+    query_vec = np.array([query_embedding['embedding']], dtype='float32')
     
-    <context>
-    {context}
-    </context>
+    # 2. FAISS එකෙන් සමානම කොටස් 3ක් හොයනවා
+    D, I = index.search(query_vec, k=3) # Top 3 results
+    
+    relevant_context = ""
+    for idx in I[0]:
+        if idx < len(text_chunks):
+            relevant_context += text_chunks[idx] + "\n\n"
+            
+    # 3. Gemini Pro Model එකට Prompt එක යවනවා
+    model = genai.GenerativeModel('gemini-pro')
+    
+    prompt = f"""
+    You are a helpful assistant. Answer the question based ONLY on the following context.
+    If the answer is not in the context, say "I don't know based on this document."
+    
+    Context:
+    {relevant_context}
+    
+    Question: {query}
+    """
+    
+    response = model.generate_content(prompt)
+    return response.text, relevant_context
 
-    Question: {input}
-    """)
-
-    # Chain 1: Generate Answer
-    document_chain = create_stuff_documents_chain(llm, prompt)
-
-    # Chain 2: Retrieve + Generate
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    retrieval_chain = create_retrieval_chain(retriever, document_chain)
-
-    return retrieval_chain 
-# Main Header
-st.title("Enterprise-Grade RAG Chatbot")
-st.caption("Advanced Features: Source Citations | Metadata Tracking | Hallucination Control")
-
+# --- UI Application ---
 
 def main():
-    load_dotenv()
-    
-    # Initialize Session State
+    st.title("🚀 Pure RAG Chatbot (No LangChain)")
+    st.caption("Powered by Google Gemini & FAISS | Zero Dependency Hell")
+
+    # Session State
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
     if "vector_store" not in st.session_state:
-        st.session_state.vector_store = None
+        st.session_state.vector_store = None # Holds (index, chunks)
 
     # Sidebar
     with st.sidebar:
-        st.header("📂 Document Control")
-        pdf_docs = st.file_uploader("Upload PDFs", accept_multiple_files=True, type=['pdf'])
+        st.header("📂 Documents")
+        pdf_docs = st.file_uploader("Upload PDF", accept_multiple_files=True, type=['pdf'])
         
-        if st.button("Analyze Documents"):
+        if st.button("Process"):
             if pdf_docs:
-                with st.spinner("Indexing documents..."):
-                    docs = get_pdf_text_with_metadata(pdf_docs)
-                    st.session_state.vector_store = get_vector_store(docs)
-                    st.success("Documents processed successfully!")
+                with st.spinner("Processing without LangChain..."):
+                    # 1. Get Text
+                    raw_text = get_pdf_text(pdf_docs)
+                    
+                    # 2. Chunking
+                    chunks = get_chunks(raw_text)
+                    st.write(f"Created {len(chunks)} text chunks.")
+                    
+                    # 3. Embeddings (Google API)
+                    embeddings = get_embeddings(chunks)
+                    
+                    # 4. Vector Store (FAISS)
+                    index = create_vector_store(chunks, embeddings)
+                    
+                    # Save to session state
+                    st.session_state.vector_store = (index, chunks)
+                    st.success("Done! Ready to chat.")
             else:
-                st.error("Please upload files first.")
+                st.error("Upload a file first.")
 
     # Chat Interface
-    user_query = st.chat_input("Ask something specific...")
+    user_query = st.chat_input("Ask something...")
 
     if user_query:
-        # Display User Message
+        # User Message
         with st.chat_message("user"):
             st.write(user_query)
         st.session_state.chat_history.append({"role": "user", "content": user_query})
 
-        # Generate Answer
+        # Assistant Message
         if st.session_state.vector_store:
+            index, chunks = st.session_state.vector_store
+            
             with st.chat_message("assistant"):
-                rag_chain = get_rag_chain(st.session_state.vector_store)
-                
                 with st.spinner("Thinking..."):
-                    response = rag_chain.invoke({"input": user_query})
-                    answer = response['answer']
-                    source_docs = response['context']
-
+                    answer, context = get_answer(user_query, index, chunks)
                     st.write(answer)
                     
-                    # Display Citations
-                    with st.expander("📚 View Source Documents"):
-                        for i, doc in enumerate(source_docs):
-                            source_name = doc.metadata.get('source', 'Unknown')
-                            page_num = doc.metadata.get('page', 'Unknown')
-                            content_preview = doc.page_content[:200]
-                            
-                            st.markdown(f"""
-                            <div class="source-box">
-                                <b>Source {i+1}:</b> {source_name} (Page {page_num})<br>
-                                <i>"{content_preview}..."</i>
-                            </div>
-                            """, unsafe_allow_html=True)
-                
-                st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                    with st.expander("Show Evidence"):
+                        st.write(context)
+            
+            st.session_state.chat_history.append({"role": "assistant", "content": answer})
         else:
-             st.warning("⚠️ Please upload and process documents first.")
+            st.warning("Please process a PDF first.")
+
+if __name__ == "__main__":
+    main()

@@ -1,11 +1,6 @@
 streamlit
-langchain
-langchain-community
-langchain-core
-langchain-google-genai
+google-generativeai
 faiss-cpu
+pypdf
 python-dotenv
-PyPDF2
-sentence-transformers
-huggingface-hub
 numpy
