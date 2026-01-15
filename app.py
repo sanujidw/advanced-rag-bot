@@ -1,9 +1,11 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
-
 from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter# Page Config
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+# Page Config
 st.set_page_config(page_title="Advanced RAG Assistant 🧠", layout="wide")
 
 # Custom CSS for Source Boxes
@@ -57,4 +59,13 @@ def get_pdf_text_with_metadata(pdf_docs):
                     metadatas=[{"source": pdf_name, "page": i + 1}]
                 )
                 documents.extend(chunks)
-    return documents    
+    return documents 
+def get_vector_store(documents):
+    """
+    Creates a FAISS vector store using Free HuggingFace embeddings.
+    """
+    # Using a lightweight, free model
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    
+    vectorstore = FAISS.from_documents(documents, embeddings)
+    return vectorstore   
