@@ -25,20 +25,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Main Header
-st.title("Enterprise-Grade RAG Chatbot")
-st.caption("Advanced Features: Source Citations | Metadata Tracking | Hallucination Control")
 
-def main():
-    # Load Environment Variables
-    load_dotenv()
-    if not os.getenv("GOOGLE_API_KEY"):
-        st.error("Google API Key missing! Please check your .env file.")
-        
-    st.write("Welcome! Upload a PDF to start.")
-
-if __name__ == "__main__":
-    main()
     
 def get_pdf_text_with_metadata(pdf_docs):
     """
@@ -100,3 +87,69 @@ def get_rag_chain(vectorstore):
     retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
     return retrieval_chain 
+# Main Header
+st.title("Enterprise-Grade RAG Chatbot")
+st.caption("Advanced Features: Source Citations | Metadata Tracking | Hallucination Control")
+
+
+def main():
+    load_dotenv()
+    
+    # Initialize Session State
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = None
+
+    # Sidebar
+    with st.sidebar:
+        st.header("📂 Document Control")
+        pdf_docs = st.file_uploader("Upload PDFs", accept_multiple_files=True, type=['pdf'])
+        
+        if st.button("Analyze Documents"):
+            if pdf_docs:
+                with st.spinner("Indexing documents..."):
+                    docs = get_pdf_text_with_metadata(pdf_docs)
+                    st.session_state.vector_store = get_vector_store(docs)
+                    st.success("Documents processed successfully!")
+            else:
+                st.error("Please upload files first.")
+
+    # Chat Interface
+    user_query = st.chat_input("Ask something specific...")
+
+    if user_query:
+        # Display User Message
+        with st.chat_message("user"):
+            st.write(user_query)
+        st.session_state.chat_history.append({"role": "user", "content": user_query})
+
+        # Generate Answer
+        if st.session_state.vector_store:
+            with st.chat_message("assistant"):
+                rag_chain = get_rag_chain(st.session_state.vector_store)
+                
+                with st.spinner("Thinking..."):
+                    response = rag_chain.invoke({"input": user_query})
+                    answer = response['answer']
+                    source_docs = response['context']
+
+                    st.write(answer)
+                    
+                    # Display Citations
+                    with st.expander("📚 View Source Documents"):
+                        for i, doc in enumerate(source_docs):
+                            source_name = doc.metadata.get('source', 'Unknown')
+                            page_num = doc.metadata.get('page', 'Unknown')
+                            content_preview = doc.page_content[:200]
+                            
+                            st.markdown(f"""
+                            <div class="source-box">
+                                <b>Source {i+1}:</b> {source_name} (Page {page_num})<br>
+                                <i>"{content_preview}..."</i>
+                            </div>
+                            """, unsafe_allow_html=True)
+                
+                st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        else:
+             st.warning("⚠️ Please upload and process documents first.")
