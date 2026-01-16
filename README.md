@@ -1,4 +1,4 @@
-# 🚀 Hybrid RAG Chatbot (No Rate Limits)
+# 🚀 Hybrid RAG Chatbot 
 
 A production-ready **Retrieval-Augmented Generation (RAG)** application built with a **Hybrid Architecture** to solve API rate limiting and cost issues.
 
